@@ -1,6 +1,9 @@
 import React, { useContext, createContext, useRef } from "react";
+import * as ReactDOMServer from 'react-dom/server';
+import get from 'lodash.get'
+import {RouterContext} from 'next/dist/shared/lib/router-context';
+// import { RouterContext } from "next/dist/next-server/lib/router-context";
 
-import { useRouter } from "next/router";
 import rosetta, { Rosetta as RosettaBase } from "rosetta";
 
 type Key = string | number | bigint | symbol;
@@ -43,11 +46,24 @@ export interface RosettaExtended<T> extends Omit<RosettaBase<T>, "t"> {
 
 export const I18nContext = createContext<RosettaExtended<any> | null>(null);
 
-export function useI18n<T = any>() {
-  const instance = useContext<RosettaExtended<T> | null>(I18nContext);
+let registered = {}
+
+export function useI18n<T = any>(register: string[]) {
+
+  const {instance, locale} = useContext<RosettaExtended<T> | null>(I18nContext);
+
   if (!instance) {
     throw new Error("There was an error getting i18n instance from context");
   }
+
+  const dict = instance.table(locale)
+
+  if (register) {
+    register.forEach((key) => {
+      registered[key] = (get(dict, key) || null)
+    })
+  }
+
   return instance;
 }
 
@@ -59,12 +75,49 @@ export type I18nProviderProps<T = any> = I18nProps<T> & {
   children?: any;
 };
 
-export function I18nProvider<T = any>({ table, children }: I18nProviderProps<T>) {
-  const i18nRef = useRef(rosetta());
-  const { locale = "en", defaultLocale = "en" } = useRouter();
 
-  i18nRef.current.set(locale ?? defaultLocale, table);
+export function I18nProvider<T = any>({ table, locale, children }: I18nProviderProps<T>) {
+  const i18nRef = useRef(rosetta());
+  i18nRef.current.set(locale ?? 'en', table);
   i18nRef.current.locale(locale);
 
-  return <I18nContext.Provider value={i18nRef.current}>{children}</I18nContext.Provider>;
+  return (
+    <I18nContext.Provider
+      value={{
+        instance: i18nRef.current,
+        locale: locale
+      }}
+    >
+      {children}
+    </I18nContext.Provider>
+  );
+}
+
+const getSubDict = () => {
+  const temp = { ...registered };
+
+  registered = {}
+  return temp
+}
+
+export const collectLocales = async (Component, locale) => {
+  const table = await import(`../dictionaries/${locale}.json`); // Import locale
+  const router =  {
+    pathname: "/",
+    route: "/",
+    query: {},
+    asPath: "/",
+  }
+
+  ReactDOMServer.renderToString(
+    <RouterContext.Provider value={router}>
+      <I18nProvider table={table} locale={locale} >
+        <Component pageProps={{}} />
+      </I18nProvider>
+    </RouterContext.Provider>
+  )
+
+  const dictionary = getSubDict()
+
+  return dictionary
 }
